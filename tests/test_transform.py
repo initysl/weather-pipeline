@@ -4,62 +4,79 @@ import pytest
 
 from src.transform import transform
 
-
-def make_data(**overrides):
-    daily = {
-        "time": ["2025-01-01", "2025-01-02", "2025-01-03"],
-        "temperature_2m_max": [31.2, 32.0, 30.5],
-        "temperature_2m_min": [18.0, 19.1, 17.4],
-        "precipitation_sum": [0.0, 1.5, 0.0],
-        "windspeed_10m_max": [12.0, 14.3, 9.8],
-    }
-    daily.update(overrides)
-    return {"daily": daily}
+EXPECTED_COLUMNS = [
+    "city", "weather_date", "temp_max_c", "temp_min_c",
+    "precipitation_mm", "wind_speed_max_kmh",
+]
 
 
-def test_shapes_clean_dataframe():
-    df = transform(make_data(), "Kano")
-    assert list(df.columns) == [
-        "city", "weather_date", "temp_max_c", "temp_min_c",
-        "precipitation_mm", "wind_speed_max_kmh",
-    ]
-    assert len(df) == 3
+def test_column_names(sample_response):
+    df = transform(sample_response, "Kano")
+    assert list(df.columns) == EXPECTED_COLUMNS
+
+
+def test_data_types(sample_response):
+    df = transform(sample_response, "Kano")
+    assert all(isinstance(d, date) for d in df["weather_date"])
+    for col in EXPECTED_COLUMNS[2:]:
+        assert df[col].dtype == "float64", col
     assert (df["city"] == "Kano").all()
-    assert df.loc[0, "weather_date"] == date(2025, 1, 1)
 
 
-def test_missing_date_fails():
+def test_values_are_kept(sample_response):
+    df = transform(sample_response, "Kano")
+    assert len(df) == 5
+    first = df.iloc[0]
+    assert first["weather_date"] == date(2026, 11, 7)
+    assert first["temp_max_c"] == 36.6
+    assert first["wind_speed_max_kmh"] == 14.9
+
+
+def test_missing_date_fails(sample_response):
+    sample_response["daily"]["time"][2] = None
     with pytest.raises(ValueError, match="missing or unparseable date"):
-        transform(make_data(time=["2025-01-01", None, "2025-01-03"]), "Kano")
+        transform(sample_response, "Kano")
 
 
-def test_gap_in_dates_fails():
+def test_gap_in_dates_fails(sample_response):
+    sample_response["daily"]["time"][2] = "2026-11-20"
     with pytest.raises(ValueError, match="missing dates"):
-        transform(make_data(time=["2025-01-01", "2025-01-02", "2025-01-04"]), "Kano")
+        transform(sample_response, "Kano")
 
 
-def test_duplicate_date_fails():
+def test_duplicate_date_fails(sample_response):
+    sample_response["daily"]["time"][1] = "2026-11-07"
     with pytest.raises(ValueError, match="duplicate dates"):
-        transform(make_data(time=["2025-01-01", "2025-01-01", "2025-01-02"]), "Kano")
+        transform(sample_response, "Kano")
 
 
-def test_out_of_range_rows_are_logged_and_dropped(caplog):
-    df = transform(
-        make_data(temperature_2m_max=[31.2, 60.0, 30.5], precipitation_sum=[0.0, 0.0, -1.0]),
-        "Kano",
-    )
-    assert list(df["weather_date"]) == [date(2025, 1, 1)]
+def test_missing_field_fails(sample_response):
+    del sample_response["daily"]["precipitation_sum"]
+    with pytest.raises(ValueError, match="precipitation_sum"):
+        transform(sample_response, "Kano")
+
+
+def test_out_of_range_rows_are_logged_and_dropped(sample_response, caplog):
+    sample_response["daily"]["temperature_2m_max"][1] = 60.0
+    sample_response["daily"]["precipitation_sum"][3] = -1.0
+    df = transform(sample_response, "Kano")
+    assert len(df) == 3
+    assert date(2026, 11, 8) not in set(df["weather_date"])
+    assert date(2026, 11, 10) not in set(df["weather_date"])
     assert "temp_max_c outside" in caplog.text
     assert "precipitation_mm < 0" in caplog.text
 
 
-def test_max_below_min_is_dropped(caplog):
-    df = transform(make_data(temperature_2m_min=[18.0, 35.0, 17.4]), "Kano")
-    assert date(2025, 1, 2) not in set(df["weather_date"])
+def test_max_below_min_is_dropped(sample_response, caplog):
+    sample_response["daily"]["temperature_2m_min"][0] = 40.0
+    df = transform(sample_response, "Kano")
+    assert date(2026, 11, 7) not in set(df["weather_date"])
     assert "temp_max_c < temp_min_c" in caplog.text
 
 
-def test_null_measurement_is_kept():
-    df = transform(make_data(precipitation_sum=[0.0, None, 0.0]), "Kano")
-    assert len(df) == 3
+def test_null_measurement_is_kept(sample_response, caplog):
+    sample_response["daily"]["precipitation_sum"][4] = None
+    df = transform(sample_response, "Kano")
+    assert len(df) == 5
     assert df["precipitation_mm"].isna().sum() == 1
+    assert "null values kept" in caplog.text

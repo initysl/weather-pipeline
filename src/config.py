@@ -21,8 +21,11 @@ TIMEZONE = "Africa/Lagos"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-# The archive API lags real time by a few days; newer dates come from the forecast API
+# The archive API's newest days can be missing or provisional for about this long
 ARCHIVE_LAG_DAYS = 5
+
+# Daily mode re-fetches this many recent days, covering the archive delay and missed runs
+DAILY_PAST_DAYS = 7
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
