@@ -4,18 +4,9 @@ from functools import lru_cache
 import pandas as pd
 from sqlalchemy import Connection, Engine, create_engine, text
 
-from src.config import CITIES, DATABASE_URL
+from src.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
-
-# Insert cities from config, or refresh their coordinates if they already exist
-UPSERT_CITY = text("""
-    INSERT INTO dim_city (name, latitude, longitude)
-    VALUES (:name, :latitude, :longitude)
-    ON CONFLICT (name) DO UPDATE
-        SET latitude = EXCLUDED.latitude,
-            longitude = EXCLUDED.longitude
-""")
 
 # One row per (city_id, weather_date): reruns overwrite instead of duplicating
 UPSERT_WEATHER = text("""
@@ -46,16 +37,6 @@ def get_engine() -> Engine:
     return create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
-def sync_cities(conn: Connection) -> dict[str, int]:
-    """Make sure every city in config exists in dim_city; return {name: city_id}."""
-    conn.execute(UPSERT_CITY, [
-        {"name": name, "latitude": lat, "longitude": lon}
-        for name, (lat, lon) in CITIES.items()
-    ])
-    rows = conn.execute(text("SELECT name, city_id FROM dim_city"))
-    return {name: city_id for name, city_id in rows}
-
-
 def upsert_weather(conn: Connection, df: pd.DataFrame) -> int:
     """Upsert transformed rows using an open connection; return rows written.
 
@@ -65,18 +46,14 @@ def upsert_weather(conn: Connection, df: pd.DataFrame) -> int:
         logger.info("Nothing to load")
         return 0
 
-    city_ids = sync_cities(conn)
-    unknown = set(df["city"]) - set(city_ids)
-    if unknown:
-        raise ValueError(f"Cities not in dim_city: {sorted(unknown)}")
-
-    out = df.assign(city_id=df["city"].map(city_ids))[FACT_COLUMNS]
+    # city_id comes from dim_city; the foreign key rejects any that doesn't exist
+    out = df[FACT_COLUMNS]
     # NaN would be stored as the NUMERIC value 'NaN', not NULL, so convert it
     out = out.astype(object).where(out.notna(), None)
     records = out.to_dict(orient="records")
 
     conn.execute(UPSERT_WEATHER, records)
-    logger.info("Upserted %d rows for %s", len(records), sorted(set(df["city"])))
+    logger.info("Upserted %d rows for city_id %s", len(records), sorted(set(df["city_id"])))
     return len(records)
 
 

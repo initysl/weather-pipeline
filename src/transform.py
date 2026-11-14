@@ -2,6 +2,7 @@
 import logging
 import pandas as pd
 
+from src.cities import City
 from src.config import TEMP_MAX_C, TEMP_MIN_C
 
 logger = logging.getLogger(__name__)
@@ -17,36 +18,37 @@ COLUMN_MAP = {
 MEASURES = ["temp_max_c", "temp_min_c", "precipitation_mm", "wind_speed_max_kmh"]
 
 
-def transform(data: dict, city: str) -> pd.DataFrame:
-    """Return one validated row per date: city, weather_date and the four measures.
+def transform(data: dict, city: City) -> pd.DataFrame:
+    """Return one validated row per date: city_id, weather_date and the four measures.
 
     Raises ValueError if dates are missing, duplicated or have gaps.
     Rows that fail range/consistency checks are logged and dropped.
     """
+    label = city.label  # for log and error messages
     daily = data.get("daily")
     if not daily:
-        raise ValueError(f"{city}: response has no 'daily' section")
+        raise ValueError(f"{label}: response has no 'daily' section")
 
     missing_cols = set(COLUMN_MAP) - set(daily)
     if missing_cols:
-        raise ValueError(f"{city}: response is missing fields {sorted(missing_cols)}")
+        raise ValueError(f"{label}: response is missing fields {sorted(missing_cols)}")
 
     # columns= keeps only the fields we use; rename then always returns a DataFrame
     df = pd.DataFrame(daily, columns=list(COLUMN_MAP)).rename(columns=COLUMN_MAP)
     df["weather_date"] = pd.to_datetime(df["weather_date"], errors="coerce").dt.date
     for col in MEASURES:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df.insert(0, "city", city)
+    df.insert(0, "city_id", city.city_id)
 
-    _check_dates(df, city)
-    df = _drop_invalid_rows(df, city)
+    _check_dates(df, label)
+    df = _drop_invalid_rows(df, label)
 
     nulls = {col: int(df[col].isna().sum()) for col in MEASURES}
     nulls = {col: n for col, n in nulls.items() if n}
     if nulls:
-        logger.warning("%s: null values kept as NULL: %s", city, nulls)
+        logger.warning("%s: null values kept as NULL: %s", label, nulls)
 
-    logger.info("%s: %d rows passed validation", city, len(df))
+    logger.info("%s: %d rows passed validation", label, len(df))
     return df.reset_index(drop=True)
 
 

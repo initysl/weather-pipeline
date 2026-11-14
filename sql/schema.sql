@@ -1,9 +1,14 @@
--- Dimension: one row per city we operate in.
+-- Dimension: one row per location we track.
+-- Cities are added with `python -m src.cities add <name>`; the pipeline loads
+-- every active one. Names repeat across Nigerian states, so (name, state) is unique.
 CREATE TABLE IF NOT EXISTS dim_city (
     city_id     SERIAL PRIMARY KEY,
-    name        TEXT          NOT NULL UNIQUE,
+    name        TEXT          NOT NULL,
+    state       TEXT          NOT NULL,
     latitude    NUMERIC(8,5)  NOT NULL,
-    longitude   NUMERIC(8,5)  NOT NULL
+    longitude   NUMERIC(8,5)  NOT NULL,
+    active      BOOLEAN       NOT NULL DEFAULT true,  -- false = keep history, stop fetching
+    CONSTRAINT dim_city_name_state_key UNIQUE (name, state)
 );
 
 -- Fact: one row per city per day.

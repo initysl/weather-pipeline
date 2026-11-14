@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Throwaway Postgres for the load tests; nothing here touches real data
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: weather
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: weather
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U weather -d weather"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    # Read by src/config.py (there's no .env file in CI)
+    env:
+      POSTGRES_USER: weather
+      POSTGRES_PASSWORD: ci-password
+      POSTGRES_DB: weather
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      PGPASSWORD: ci-password
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create tables, seed cities, create views
+        run: |
+          psql -h localhost -U weather -d weather -v ON_ERROR_STOP=1 -f sql/schema.sql
+          psql -h localhost -U weather -d weather -v ON_ERROR_STOP=1 -f sql/seed_cities.sql
+          psql -h localhost -U weather -d weather -v ON_ERROR_STOP=1 -f sql/summaries.sql
+
+      - name: Run tests
+        run: pytest -v

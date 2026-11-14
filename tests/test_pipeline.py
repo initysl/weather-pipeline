@@ -24,9 +24,13 @@ def test_backfill_parses_dates():
     ["--mode", "backfill", "--start", "2024-01-01"],                         # no --end
     ["--mode", "backfill", "--start", "2024-12-31", "--end", "2024-01-01"],  # reversed
     ["--mode", "backfill", "--start", "2024-01-01", "--end", "2999-01-01"],  # future
-    ["--mode", "daily", "--cities", "Atlantis"],                             # unknown city
     [],                                                                      # no mode
 ])
 def test_invalid_args_exit(argv):
     with pytest.raises(SystemExit):
         parse_args(argv)
+
+
+def test_cities_accept_name_and_state():
+    args = parse_args(["--mode", "daily", "--cities", "Kano", "Ibadan, Oyo"])
+    assert args.cities == ["Kano", "Ibadan, Oyo"]

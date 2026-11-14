@@ -1,5 +1,7 @@
 # weather-pipeline
 
+[![CI](https://github.com/initysl/weather-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/initysl/weather-pipeline/actions/workflows/ci.yml)
+
 A daily batch pipeline that keeps a clean, de-duplicated table of weather for the Nigerian cities an agritech startup serves, so analysts can answer questions like *"how many rainy days did Kano get this month?"* or *"is Osogbo hotter than usual this week?"*
 
 ## The scenario
@@ -27,9 +29,10 @@ flowchart LR
 |---|---|---|
 | Extract | [src/extract.py](src/extract.py) | Calls Open-Meteo per city, retries failures with backoff, saves the raw JSON to `data/raw/` |
 | Transform | [src/transform.py](src/transform.py) | Turns the API's parallel arrays into a DataFrame, renames columns, validates |
-| Load | [src/load.py](src/load.py) | Syncs `dim_city`, upserts rows into `fact_daily_weather` |
-| Orchestrate | [src/pipeline.py](src/pipeline.py) | Command-line entry point, runs each city independently, exits non-zero on failure |
-| Config | [src/config.py](src/config.py) | Cities, endpoints, validation bounds, DB connection from `.env` |
+| Load | [src/load.py](src/load.py) | Upserts rows into `fact_daily_weather` |
+| Orchestrate | [src/pipeline.py](src/pipeline.py) | Command-line entry point, runs every active city independently, exits non-zero on failure |
+| Cities | [src/cities.py](src/cities.py) | Finds Nigerian towns with Open-Meteo's geocoder and manages `dim_city` |
+| Config | [src/config.py](src/config.py) | Endpoints, validation bounds, DB connection from `.env` |
 
 ## Schema
 
@@ -39,8 +42,10 @@ erDiagram
     dim_city {
         serial city_id PK
         text name UK
+        text state UK
         numeric latitude
         numeric longitude
+        boolean active
     }
     fact_daily_weather {
         int city_id PK,FK
@@ -53,7 +58,7 @@ erDiagram
     }
 ```
 
-Definitions: [sql/schema.sql](sql/schema.sql). The primary key `(city_id, weather_date)` is what makes the whole pipeline safe to re-run.
+Definitions: [sql/schema.sql](sql/schema.sql). `(name, state)` is unique because town names repeat across states (there are at least eight places called Ibadan). The primary key `(city_id, weather_date)` is what makes the whole pipeline safe to re-run.
 
 **Analyst views** ([sql/summaries.sql](sql/summaries.sql)):
 
@@ -81,15 +86,30 @@ WHERE city = 'Osogbo' AND weather_date >= CURRENT_DATE - 7;
 cp .env.example .env                      # set a real POSTGRES_PASSWORD
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 source .venv/bin/activate
-docker compose up -d                      # Postgres 16; applies schema.sql and summaries.sql on first start
+docker compose up -d                      # Postgres 16; on first start runs schema.sql, seed_cities.sql (5 cities), summaries.sql
 ```
 
 The SQL files only run automatically when the database volume is empty. To apply changes to an existing database:
 
 ```bash
-docker exec -i weather-db psql -U weather -d weather < sql/schema.sql
+docker exec -i weather-db psql -U weather -d weather < sql/migrations/001_city_state_active.sql  # only for databases created before cities moved out of config
 docker exec -i weather-db psql -U weather -d weather < sql/summaries.sql
 ```
+
+### Choosing cities
+
+Any town or city in Nigeria can be tracked. The pipeline loads every *active* row in `dim_city`:
+
+```bash
+python -m src.cities search Ilorin                          # look it up, add nothing
+python -m src.cities add Ilorin --backfill-from 2024-01-01  # track it and load its history
+python -m src.cities add Ibadan --state Ogun --pick 2       # choose among same-named places
+python -m src.cities list                                   # what's tracked (--all includes inactive)
+python -m src.cities deactivate "Ilorin"                    # stop fetching, keep history
+python -m src.cities activate "Ilorin, Kwara"
+```
+
+`add` looks the name up with Open-Meteo's geocoding API, keeps only Nigerian towns and cities, and prints exactly what it matched. When a name is shared, it picks the one that is a capital or local government seat (so `Ibadan` means the Oyo State capital, not one of the villages). If that still leaves several, it lists them and asks for `--state` or `--pick`.
 
 ### Backfill and daily modes
 
@@ -102,8 +122,8 @@ python -m src.pipeline --mode backfill --start 2024-01-01 --end 2026-11-08
 # Daily: re-fetches the last 7 complete days from the forecast API
 python -m src.pipeline --mode daily
 
-# Any mode can be limited to some cities; --no-raw skips the JSON copy
-python -m src.pipeline --mode daily --cities Kano Osogbo --no-raw
+# Any mode can be limited to some cities ("Name" or "Name, State"); --no-raw skips the JSON copy
+python -m src.pipeline --mode daily --cities Kano "Ibadan, Oyo" --no-raw
 ```
 
 The exit code is 1 if any city failed, so a scheduler can flag the run.
@@ -127,6 +147,7 @@ pytest
 - `test_transform.py`: uses a real sample response ([tests/fixtures/sample_response.json](tests/fixtures/sample_response.json)) and checks column names, data types and every validation rule
 - `test_load.py`: loads the same data twice and asserts the row count doesn't change; also checks that values update and NaN becomes NULL. It runs against the Docker database inside a transaction that is rolled back, and is skipped if the database is down.
 - `test_extract.py`: checks the endpoint and parameters each mode sends, using a fake HTTP session (no network)
+- `test_cities.py`: geocoder filtering and how one place is chosen among several, matching `--cities` names, and adding cities (in a rolled-back transaction)
 - `test_pipeline.py`: command-line validation
 
 ## Design decisions
@@ -149,15 +170,24 @@ pytest
 
 **Raw JSON copies.** Each API response is saved to `data/raw/` (ignored by git), so a transform bug can be fixed and the data reprocessed without calling the API again.
 
-**Star schema.** City details live once in `dim_city`; the fact table stores only `city_id`. Cities are defined in `config.py` and synced on every run (`ON CONFLICT (name) DO UPDATE`), so correcting coordinates in config updates the database.
+**Star schema, with cities as data, not code.** City details live once in `dim_city`; the fact table stores only `city_id`. The list of cities lives in the database rather than in a config file, so analysts can start tracking a new town with one command instead of a code change and a deploy. Cities are switched off with `active = false` instead of being deleted, because their weather history is still worth keeping (and the foreign key wouldn't allow deleting them anyway).
+
+**Geocoding has to be checked, not trusted.** Open-Meteo's geocoder treats `country_code=NG` as a hint (asking for "Kano" also returns towns in Japan and Tanzania) and includes airports and districts, so results are filtered to Nigerian populated places. Names are ambiguous, so `add` always prints what it matched. Coordinates of an existing city are never overwritten by a new lookup, because its history was fetched with the original ones.
 
 **Views, not tables, for summaries.** The data is small (a few thousand rows), so views are fast enough and are always up to date with no refresh step. The rolling average uses `RANGE BETWEEN INTERVAL '6 days' PRECEDING` instead of `ROWS BETWEEN 6 PRECEDING`, so a missing day can't stretch the window past 7 days; `days_in_window` shows when it covers fewer.
+
+## Limits worth knowing
+
+- **Licensing:** Open-Meteo's free API is for non-commercial use. A real company would need its paid plan.
+- **API quota:** the free tier allows roughly 10,000 calls a day. Daily mode is one call per city, so hundreds of cities fit. Multi-year backfills count as more than one call, so large backfills should be spread out.
+- **Grid resolution:** the weather models work on a grid of roughly 10–25 km. Towns close together can get identical values.
+- **Same name, same state:** two villages can share both a name and a state (the geocoder lists two Ibadans in Odeda, Ogun State). Only one of them can be tracked under that `(name, state)`.
 
 ## Project layout
 
 ```
-src/            config, extract, transform, load, pipeline
-sql/            schema.sql, summaries.sql
+src/            config, cities, extract, transform, load, pipeline
+sql/            schema.sql, seed_cities.sql, summaries.sql, migrations/
 tests/          pytest tests and a sample API response
 data/raw/       raw API responses (git-ignored)
 logs/           cron output (git-ignored)

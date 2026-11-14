@@ -1,25 +1,20 @@
-"""Project configuration: cities, API endpoints and DB connection."""
+"""Project configuration: API endpoints, validation bounds and DB connection.
+
+Cities live in the dim_city table, not here: see src/cities.py.
+"""
 import os
 from pathlib import Path
-
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Cities we operate in: name -> (latitude, longitude)
-CITIES = {
-    "Kano": (12.0022, 8.5920),
-    "Osogbo": (7.7827, 4.5418),
-    "Ibadan": (7.3775, 3.9470),
-    "Kaduna": (10.5105, 7.4165),
-    "Lagos": (6.5244, 3.3792),
-}
-
 TIMEZONE = "Africa/Lagos"
+COUNTRY_CODE = "NG"
 
 # Open-Meteo: forecast API covers recent days; archive API covers history
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
 # The archive API's newest days can be missing or provisional for about this long
 ARCHIVE_LAG_DAYS = 5

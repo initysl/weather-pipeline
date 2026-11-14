@@ -3,7 +3,9 @@
 Examples (run from the project root):
     python -m src.pipeline --mode daily
     python -m src.pipeline --mode backfill --start 2024-01-01 --end 2026-11-08
-    python -m src.pipeline --mode backfill --start 2026-11-01 --end 2026-11-07 --cities Kano Osogbo
+    python -m src.pipeline --mode daily --cities Kano "Ibadan, Oyo"
+
+Cities come from the dim_city table (manage them with `python -m src.cities`).
 """
 import argparse
 import logging
@@ -11,7 +13,8 @@ import sys
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from src.config import ARCHIVE_LAG_DAYS, CITIES, DAILY_PAST_DAYS, TIMEZONE
+from src.cities import City, list_cities, resolve
+from src.config import ARCHIVE_LAG_DAYS, DAILY_PAST_DAYS, TIMEZONE
 from src.extract import fetch_archive, fetch_recent
 from src.load import get_engine, load
 from src.transform import transform
@@ -24,6 +27,10 @@ def local_today() -> date:
     return datetime.now(ZoneInfo(TIMEZONE)).date()
 
 
+def yesterday() -> date:
+    return local_today() - timedelta(days=1)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Load daily weather into Postgres.")
     parser.add_argument("--mode", choices=["daily", "backfill"], required=True,
@@ -31,8 +38,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "backfill: --start..--end (archive API)")
     parser.add_argument("--start", type=date.fromisoformat, help="backfill only, YYYY-MM-DD")
     parser.add_argument("--end", type=date.fromisoformat, help="backfill only, YYYY-MM-DD")
-    parser.add_argument("--cities", nargs="+", choices=list(CITIES), default=list(CITIES),
-                        help="default: all cities in config")
+    parser.add_argument("--cities", nargs="+", metavar="CITY",
+                        help="'Name' or 'Name, State' (default: every active city in dim_city)")
     parser.add_argument("--no-raw", action="store_true",
                         help="don't save raw JSON to data/raw/")
     args = parser.parse_args(argv)
@@ -45,13 +52,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             parser.error("--mode backfill needs --start and --end")
         if args.start > args.end:
             parser.error(f"--start {args.start} is after --end {args.end}")
-        yesterday = local_today() - timedelta(days=1)
-        if args.end > yesterday:
-            parser.error(f"--end can be at most {yesterday}; today isn't over yet")
+        if args.end > yesterday():
+            parser.error(f"--end can be at most {yesterday()}; today isn't over yet")
     return args
 
 
-def run(mode: str, cities: list[str], start: date | None = None,
+def run(mode: str, cities: list[City], start: date | None = None,
         end: date | None = None, save_raw: bool = True) -> list[str]:
     """Process each city independently; return the cities that failed."""
     if mode == "backfill" and end and end > local_today() - timedelta(days=ARCHIVE_LAG_DAYS):
@@ -71,8 +77,8 @@ def run(mode: str, cities: list[str], start: date | None = None,
             load(df, engine)  # one transaction per city
         except Exception:
             # Keep going so one bad city doesn't block the rest
-            logger.exception("%s failed", city)
-            failed.append(city)
+            logger.exception("%s failed", city.label)
+            failed.append(city.label)
 
     logger.info("Done (%s): %d ok, %d failed %s",
                 mode, len(cities) - len(failed), len(failed), failed or "")
@@ -85,7 +91,19 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     args = parse_args(argv)
-    failed = run(args.mode, args.cities, args.start, args.end, save_raw=not args.no_raw)
+
+    with get_engine().connect() as conn:
+        tracked = list_cities(conn)
+    try:
+        cities = resolve(tracked, args.cities) if args.cities else tracked
+    except ValueError as e:
+        logger.error("%s", e)
+        return 2
+    if not cities:
+        logger.error("No active cities in dim_city. Add one with: python -m src.cities add <name>")
+        return 1
+
+    failed = run(args.mode, cities, args.start, args.end, save_raw=not args.no_raw)
     # Non-zero exit tells a scheduler (cron etc.) that the run needs attention
     return 1 if failed else 0
 

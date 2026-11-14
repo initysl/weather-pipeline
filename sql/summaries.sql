@@ -1,12 +1,15 @@
 -- Analyst-facing views over fact_daily_weather.
 -- Views always reflect the latest load, so there's nothing to refresh.
--- Safe to re-run: CREATE OR REPLACE.
+-- Safe to re-run: each view is dropped and recreated.
+
+DROP VIEW IF EXISTS v_monthly_city_summary, v_temp_7day_rolling, v_hotter_than_usual;
 
 -- 1. Monthly summary per city
 --    "How many rainy days did Kano get this month?"
-CREATE OR REPLACE VIEW v_monthly_city_summary AS
+CREATE VIEW v_monthly_city_summary AS
 SELECT
     c.name                                              AS city,
+    c.state,
     date_trunc('month', f.weather_date)::date           AS month,
     COUNT(*)                                            AS days_recorded,
     ROUND(AVG(f.temp_max_c), 1)                         AS avg_temp_max_c,
@@ -15,14 +18,15 @@ SELECT
     COUNT(*) FILTER (WHERE f.precipitation_mm > 1)      AS rainy_days  -- > 1 mm ignores drizzle
 FROM fact_daily_weather f
 JOIN dim_city c USING (city_id)
-GROUP BY c.name, date_trunc('month', f.weather_date);
+GROUP BY c.city_id, c.name, c.state, date_trunc('month', f.weather_date);
 
 
 -- 2. 7-day rolling average of max temperature
 --    RANGE over dates (not ROWS) so a missing day can't stretch the window past 7 days.
-CREATE OR REPLACE VIEW v_temp_7day_rolling AS
+CREATE VIEW v_temp_7day_rolling AS
 SELECT
     c.name                                              AS city,
+    c.state,
     f.weather_date,
     f.temp_max_c,
     ROUND(AVG(f.temp_max_c) OVER w, 1)                  AS temp_max_7day_avg_c,
@@ -39,7 +43,7 @@ WINDOW w AS (
 -- 3. Hotter than usual
 --    Each day vs that city's average max temperature for the same calendar month
 --    in all *previous* years. "Is Osogbo hotter than usual this week?"
-CREATE OR REPLACE VIEW v_hotter_than_usual AS
+CREATE VIEW v_hotter_than_usual AS
 WITH city_month_year AS (
     SELECT
         city_id,
@@ -65,6 +69,7 @@ baseline AS (
 )
 SELECT
     c.name                                               AS city,
+    c.state,
     f.weather_date,
     f.temp_max_c,
     ROUND(b.usual_temp_max_c, 1)                         AS usual_temp_max_c,

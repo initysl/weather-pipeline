@@ -9,7 +9,8 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Runs only on first start, when the data volume is empty
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-      - ./sql/summaries.sql:/docker-entrypoint-initdb.d/02_summaries.sql:ro
+      - ./sql/seed_cities.sql:/docker-entrypoint-initdb.d/02_seed_cities.sql:ro
+      - ./sql/summaries.sql:/docker-entrypoint-initdb.d/03_summaries.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
