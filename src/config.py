@@ -1,5 +1,6 @@
 """Project configuration: cities, API endpoints and DB connection."""
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -20,6 +21,12 @@ TIMEZONE = "Africa/Lagos"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
+# The archive API lags real time by a few days; newer dates come from the forecast API
+ARCHIVE_LAG_DAYS = 5
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RAW_DIR = PROJECT_ROOT / "data" / "raw"
+
 DAILY_VARIABLES = [
     "temperature_2m_max",
     "temperature_2m_min",
@@ -27,7 +34,11 @@ DAILY_VARIABLES = [
     "windspeed_10m_max",
 ]
 
-DB_USER = os.getenv("POSTGRES_USER", "weather")
+# Validation bounds; rows outside these are logged and dropped in transform
+TEMP_MIN_C = -10
+TEMP_MAX_C = 55
+
+DB_USER =os.getenv("POSTGRES_USER", "weather")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 DB_NAME = os.getenv("POSTGRES_DB", "weather")
 DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
