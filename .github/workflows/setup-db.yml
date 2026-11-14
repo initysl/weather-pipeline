@@ -1,0 +1,32 @@
+name: Set up database
+
+# Run once by hand after creating the hosted database, and again after changing
+# the SQL files. Every file is safe to re-run: tables use IF NOT EXISTS, the seed
+# skips existing cities, and the views are dropped and recreated.
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the database secret is set
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Add a DATABASE_URL secret (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+
+      - name: Create tables, seed cities, create views
+        run: |
+          for f in sql/schema.sql sql/seed_cities.sql sql/summaries.sql; do
+            echo "Applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      - name: Show what's there
+        run: psql "$DATABASE_URL" -c "SELECT city_id, name, state, active FROM dim_city ORDER BY name;"

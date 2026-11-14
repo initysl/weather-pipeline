@@ -36,12 +36,22 @@ DAILY_VARIABLES = [
 TEMP_MIN_C = -10
 TEMP_MAX_C = 55
 
-DB_USER =os.getenv("POSTGRES_USER", "weather")
+DB_USER = os.getenv("POSTGRES_USER", "weather")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 DB_NAME = os.getenv("POSTGRES_DB", "weather")
 DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
 DB_PORT = os.getenv("POSTGRES_PORT", "5432")
 
-DATABASE_URL = (
-    f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-)
+
+def _database_url() -> str:
+    """A full DATABASE_URL (hosted Postgres) wins; otherwise build one from POSTGRES_* (Docker)."""
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        return f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    # Some providers hand out postgres://, which SQLAlchemy 2 doesn't accept
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+DATABASE_URL = _database_url()

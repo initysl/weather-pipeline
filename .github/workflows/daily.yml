@@ -1,0 +1,70 @@
+name: Daily weather load
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC = 07:00 Africa/Lagos
+  workflow_dispatch:       # "Run workflow" button, also used for backfills
+    inputs:
+      mode:
+        description: daily (last 7 days) or backfill (needs start and end)
+        type: choice
+        options: [daily, backfill]
+        default: daily
+      start:
+        description: "Backfill start, YYYY-MM-DD"
+        required: false
+      end:
+        description: "Backfill end, YYYY-MM-DD"
+        required: false
+
+# Never run two loads at once; a second one waits for the first
+concurrency:
+  group: weather-load
+  cancel-in-progress: false
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # Inputs go through env, not straight into the script, so they can't inject shell code
+      MODE: ${{ inputs.mode || 'daily' }}
+      START: ${{ inputs.start }}
+      END: ${{ inputs.end }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check the database secret is set
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Add a DATABASE_URL secret (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+
+      - name: Run pipeline
+        run: |
+          if [ "$MODE" = "backfill" ]; then
+            python -m src.pipeline --mode backfill --start "$START" --end "$END"
+          else
+            python -m src.pipeline --mode daily
+          fi
+
+      # The runner is deleted after the job, so keep the raw API responses as an artifact
+      - name: Keep raw JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-json-${{ github.run_id }}
+          path: data/raw/
+          retention-days: 30
+          if-no-files-found: ignore

@@ -138,6 +138,26 @@ Run daily mode at 07:00 (the cron times use the machine's time zone, here Africa
 
 Add it with `crontab -e`. Postgres restarts with Docker (`restart: unless-stopped`), so the job works after a reboot. Because daily mode re-fetches 7 days, a missed run (machine off, API down) is repaired by the next successful one.
 
+### Deployment (GitHub Actions + hosted Postgres)
+
+The production pipeline runs on GitHub's servers and writes to a hosted Postgres (e.g. Neon or Supabase), so it doesn't depend on a laptop being on.
+
+| Workflow | When | What |
+|---|---|---|
+| [ci.yml](.github/workflows/ci.yml) | every push | tests against a throwaway Postgres |
+| [daily.yml](.github/workflows/daily.yml) | 07:00 Lagos daily, or by hand | `--mode daily`; run by hand with `mode: backfill` to load history. Raw JSON is kept as a run artifact for 30 days |
+| [setup-db.yml](.github/workflows/setup-db.yml) | by hand | applies `schema.sql`, `seed_cities.sql`, `summaries.sql` (all safe to re-run) |
+
+One-time setup:
+1. Create a Postgres database with a hosted provider and copy its connection string.
+2. Add it to the repo as a secret named `DATABASE_URL` (Settings → Secrets and variables → Actions).
+3. Actions → **Set up database** → Run workflow.
+4. Actions → **Daily weather load** → Run workflow with `mode: backfill`, a start date and yesterday as the end date.
+
+After that the schedule takes over. To manage cities in the hosted database, run the same commands locally with `DATABASE_URL` set; it takes priority over the `POSTGRES_*` settings.
+
+Things GitHub does with scheduled workflows: runs can start some minutes late when GitHub is busy; failed runs trigger an email; and in a repository with no activity for 60 days, scheduled workflows are switched off until re-enabled.
+
 ### Tests
 
 ```bash
