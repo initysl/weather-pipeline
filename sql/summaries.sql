@@ -42,7 +42,7 @@ WINDOW w AS (
 
 -- 3. Hotter than usual
 --    Each day vs that city's average max temperature for the same calendar month
---    in all *previous* years. "Is Osogbo hotter than usual this week?"
+--    in all *previous* years. "Is Lagos hotter than usual this week?"
 CREATE VIEW v_hotter_than_usual AS
 WITH city_month_year AS (
     SELECT
