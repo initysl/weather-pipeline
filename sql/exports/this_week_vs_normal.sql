@@ -7,6 +7,12 @@ SELECT
     ROUND(AVG(h.temp_max_c), 1)             AS "This week (°C)",
     ROUND(AVG(h.usual_temp_max_c), 1)       AS "Usual (°C)",
     ROUND(AVG(h.anomaly_c), 1)              AS "Difference (°C)",
+    -- A category for chart colours, so the colouring follows the data every day
+    CASE
+        WHEN ROUND(AVG(h.anomaly_c), 1) > 0 THEN 'Hotter than usual'
+        WHEN ROUND(AVG(h.anomaly_c), 1) < 0 THEN 'Cooler than usual'
+        ELSE 'As usual'
+    END                                     AS "Compared with usual",
     MAX(h.weather_date)                     AS "Week ending"
 FROM v_hotter_than_usual h
 -- A scalar subquery runs once. (As a joined CTE, Postgres re-ran MAX() for every row: 30+ s.)

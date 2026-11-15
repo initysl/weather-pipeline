@@ -7,6 +7,10 @@ A daily data pipeline that keeps a clean, trustworthy weather table for 15 Niger
 - *How many rainy days did Kano get this month?*
 - *Is Osogbo hotter than usual this week?*
 
+[![Annual rainfall in 15 Nigerian cities](https://datawrapper.dwcdn.net/wchVF/full.png)](https://datawrapper.dwcdn.net/wchVF/)
+
+**Live charts, updated by the pipeline:** [Annual rainfall](https://datawrapper.dwcdn.net/wchVF/) · [Rainy season by month](https://datawrapper.dwcdn.net/0NSzC/) · [This week vs normal](https://datawrapper.dwcdn.net/2wToA/)
+
 ## What it does
 
 - **Updates every morning:** fetches yesterday's weather at 07:00 Lagos time, automatically.

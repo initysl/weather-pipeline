@@ -30,7 +30,11 @@ def test_exports_have_chart_ready_columns(conn, tmp_path):
         "City", "State", "Year", "Rainfall (mm)", "Rainy days"]
     assert list(pd.read_csv(files["rainy_days_by_month"]).columns)[2:] == [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    assert "Difference (°C)" in pd.read_csv(files["this_week_vs_normal"]).columns
+    week = pd.read_csv(files["this_week_vs_normal"])
+    assert {"Difference (°C)", "Compared with usual"} <= set(week.columns)
+    # The colour category always agrees with the sign of the difference
+    for diff, label in zip(week["Difference (°C)"], week["Compared with usual"]):
+        assert label == ("Hotter than usual" if diff > 0 else "Cooler than usual" if diff < 0 else "As usual")
 
 
 def test_annual_rainfall_totals_a_full_year(conn, tmp_path):
