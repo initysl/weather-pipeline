@@ -77,8 +77,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: python -m src.export --out exports
 
+      # !cancelled() is needed: without a status function, GitHub silently adds success(),
+      # which skips this step whenever any city failed
       - name: Publish chart data to the data branch
-        if: ${{ steps.export.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.export.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

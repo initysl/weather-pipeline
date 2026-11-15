@@ -34,3 +34,50 @@ def test_invalid_args_exit(argv):
 def test_cities_accept_name_and_state():
     args = parse_args(["--mode", "daily", "--cities", "Kano", "Ibadan, Oyo"])
     assert args.cities == ["Kano", "Ibadan, Oyo"]
+
+
+# ---------- run(): failed cities get a second attempt ----------
+
+from src import pipeline
+from src.cities import City
+
+CITIES = [City(1, "Kano", "Kano State", 12.0, 8.6), City(2, "Abuja", "FCT", 9.1, 7.5)]
+
+
+@pytest.fixture
+def fake_steps(monkeypatch):
+    """Replace extract/transform/load; `fails[label]` = how many attempts fail first."""
+    fails, attempts = {}, []
+
+    def fake_fetch(city, *args, **kwargs):
+        attempts.append(city.label)
+        if fails.get(city.label, 0) > 0:
+            fails[city.label] -= 1
+            raise TimeoutError("Read timed out")
+        return {}
+
+    monkeypatch.setattr(pipeline, "fetch_recent", fake_fetch)
+    monkeypatch.setattr(pipeline, "transform", lambda data, city: None)
+    monkeypatch.setattr(pipeline, "load", lambda df, engine: 0)
+    monkeypatch.setattr(pipeline, "get_engine", lambda: None)
+    return fails, attempts
+
+
+def test_city_that_recovers_on_second_attempt_counts_as_ok(fake_steps):
+    fails, attempts = fake_steps
+    fails["Abuja (FCT)"] = 1
+    assert pipeline.run("daily", CITIES, retry_after=0) == []
+    assert attempts == ["Kano (Kano State)", "Abuja (FCT)", "Abuja (FCT)"]
+
+
+def test_city_that_keeps_failing_is_reported(fake_steps):
+    fails, attempts = fake_steps
+    fails["Abuja (FCT)"] = 5
+    assert pipeline.run("daily", CITIES, retry_after=0) == ["Abuja (FCT)"]
+    assert attempts.count("Abuja (FCT)") == 2  # one retry pass, not endless
+
+
+def test_no_retry_pass_when_everything_succeeds(fake_steps):
+    _, attempts = fake_steps
+    assert pipeline.run("daily", CITIES, retry_after=0) == []
+    assert len(attempts) == 2

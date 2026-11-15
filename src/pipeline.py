@@ -10,11 +10,12 @@ Cities come from the dim_city table (manage them with `python -m src.cities`).
 import argparse
 import logging
 import sys
+import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from src.cities import City, list_cities, resolve
-from src.config import ARCHIVE_LAG_DAYS, DAILY_PAST_DAYS, TIMEZONE
+from src.config import ARCHIVE_LAG_DAYS, DAILY_PAST_DAYS, RETRY_FAILED_AFTER_SECONDS, TIMEZONE
 from src.extract import fetch_archive, fetch_recent
 from src.load import get_engine, load
 from src.transform import transform
@@ -57,32 +58,51 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def _process_city(city: City, mode: str, start: date | None, end: date | None,
+                  save_raw: bool, engine) -> bool:
+    """Extract, transform and load one city; return True on success."""
+    try:
+        if mode == "daily":
+            data = fetch_recent(city, DAILY_PAST_DAYS, save_raw=save_raw)
+        else:
+            assert start and end
+            data = fetch_archive(city, start, end, save_raw=save_raw)
+        df = transform(data, city)
+        load(df, engine)  # one transaction per city
+        return True
+    except Exception:
+        # Keep going so one bad city doesn't block the rest
+        logger.exception("%s failed", city.label)
+        return False
+
+
 def run(mode: str, cities: list[City], start: date | None = None,
-        end: date | None = None, save_raw: bool = True) -> list[str]:
-    """Process each city independently; return the cities that failed."""
+        end: date | None = None, save_raw: bool = True,
+        retry_after: float = RETRY_FAILED_AFTER_SECONDS) -> list[str]:
+    """Process each city independently; return the cities that still failed.
+
+    Cities that fail are tried once more after `retry_after` seconds, so a brief
+    API outage doesn't fail the whole run. (Each request already retries quickly;
+    this second pass covers problems lasting a minute or two.)
+    """
     if mode == "backfill" and end and end > local_today() - timedelta(days=ARCHIVE_LAG_DAYS):
         logger.warning("Archive data for the last %d days may be incomplete; "
                        "daily mode will overwrite them", ARCHIVE_LAG_DAYS)
 
     engine = get_engine()
-    failed = []
-    for city in cities:
-        try:
-            if mode == "daily":
-                data = fetch_recent(city, DAILY_PAST_DAYS, save_raw=save_raw)
-            else:
-                assert start and end
-                data = fetch_archive(city, start, end, save_raw=save_raw)
-            df = transform(data, city)
-            load(df, engine)  # one transaction per city
-        except Exception:
-            # Keep going so one bad city doesn't block the rest
-            logger.exception("%s failed", city.label)
-            failed.append(city.label)
+    failed = [c for c in cities if not _process_city(c, mode, start, end, save_raw, engine)]
 
+    if failed:
+        logger.warning("Retrying %d failed %s in %ds: %s", len(failed),
+                       "city" if len(failed) == 1 else "cities", retry_after,
+                       [c.label for c in failed])
+        time.sleep(retry_after)
+        failed = [c for c in failed if not _process_city(c, mode, start, end, save_raw, engine)]
+
+    labels = [c.label for c in failed]
     logger.info("Done (%s): %d ok, %d failed %s",
-                mode, len(cities) - len(failed), len(failed), failed or "")
-    return failed
+                mode, len(cities) - len(failed), len(failed), labels or "")
+    return labels
 
 
 def main(argv: list[str] | None = None) -> int:

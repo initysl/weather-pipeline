@@ -22,6 +22,9 @@ ARCHIVE_LAG_DAYS = 5
 # Daily mode re-fetches this many recent days, covering the archive delay and missed runs
 DAILY_PAST_DAYS = 7
 
+# Cities that fail are tried once more after this pause, within the same run
+RETRY_FAILED_AFTER_SECONDS = 60
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 
