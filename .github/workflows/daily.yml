@@ -26,6 +26,8 @@ jobs:
   load:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write   # to publish chart data to the `data` branch
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       # Inputs go through env, not straight into the script, so they can't inject shell code
@@ -68,3 +70,18 @@ jobs:
           path: data/raw/
           retention-days: 30
           if-no-files-found: ignore
+
+      # Runs even if one city failed: the others still loaded, so the charts stay current
+      - name: Export chart data
+        id: export
+        if: ${{ !cancelled() }}
+        run: python -m src.export --out exports
+
+      - name: Publish chart data to the data branch
+        if: ${{ steps.export.outcome == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/publish_data_branch.sh exports \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          echo "Chart data: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/" >> "$GITHUB_STEP_SUMMARY"
