@@ -109,7 +109,7 @@ When several towns share a name, the main one (a capital or local government sea
 
 ### Schedule
 
-In production, [GitHub Actions](.github/workflows/daily.yml) runs the daily load every morning against a hosted PostgreSQL:
+In production, [GitHub Actions](.github/workflows/daily.yml) runs the daily load three times a day against a hosted PostgreSQL (the first run that succeeds brings the data up to date):
 
 1. Add the database connection string as a repository secret named `DATABASE_URL`.
 2. Run the **Set up database** workflow once.

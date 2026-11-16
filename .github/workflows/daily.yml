@@ -2,9 +2,12 @@ name: Daily weather load
 
 on:
   schedule:
-    # 05:17 UTC = 06:17 Africa/Lagos. Off the hour on purpose: GitHub delays or drops
-    # scheduled runs most often at the start of each hour.
-    - cron: "17 5 * * *"
+    # Three attempts a day: 06:17, 12:17 and 18:17 Africa/Lagos (UTC+1). Each run reloads
+    # the last 7 days, so the first one that succeeds brings the data up to date and the
+    # others just overwrite the same rows. Requests from GitHub's runners to Open-Meteo
+    # fail intermittently, so one attempt a day isn't enough.
+    # Off the hour on purpose: GitHub delays or drops scheduled runs most often at :00.
+    - cron: "17 5,11,17 * * *"
   workflow_dispatch:       # "Run workflow" button, also used for backfills
     inputs:
       mode:
@@ -62,6 +65,26 @@ jobs:
           else
             python -m src.pipeline --mode daily
           fi
+
+      # Only when the load failed: time each stage of a connection to Open-Meteo, to show
+      # whether it stalls looking up the address, connecting, in the secure handshake
+      # (tls) or waiting for the reply. Never fails the job itself.
+      - name: Diagnose Open-Meteo connection
+        if: failure()
+        continue-on-error: true
+        run: |
+          for url in \
+            "https://api.open-meteo.com/v1/forecast?latitude=9.06&longitude=7.50&daily=temperature_2m_max&past_days=1&forecast_days=0" \
+            "https://archive-api.open-meteo.com/v1/archive?latitude=9.06&longitude=7.50&daily=temperature_2m_max&start_date=2025-01-01&end_date=2025-01-02"; do
+            host=$(echo "$url" | cut -d/ -f3)
+            echo "== $host"
+            getent ahosts "$host" | awk '{print $1}' | sort -u | tr '\n' ' '; echo
+            for i in 1 2 3; do
+              curl -sS -o /dev/null --max-time 60 \
+                -w "attempt $i: http %{http_code}  ip %{remote_ip}  dns %{time_namelookup}s  connect %{time_connect}s  tls %{time_appconnect}s  first byte %{time_starttransfer}s  total %{time_total}s\n" \
+                "$url" || echo "attempt $i: curl exit $?"
+            done
+          done
 
       # The runner is deleted after the job, so keep the raw API responses as an artifact
       - name: Keep raw JSON
