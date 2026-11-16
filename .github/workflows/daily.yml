@@ -2,7 +2,9 @@ name: Daily weather load
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # 06:00 UTC = 07:00 Africa/Lagos
+    # 05:17 UTC = 06:17 Africa/Lagos. Off the hour on purpose: GitHub delays or drops
+    # scheduled runs most often at the start of each hour.
+    - cron: "17 5 * * *"
   workflow_dispatch:       # "Run workflow" button, also used for backfills
     inputs:
       mode:

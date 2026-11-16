@@ -36,7 +36,7 @@ def test_cities_accept_name_and_state():
     assert args.cities == ["Kano", "Ibadan, Oyo"]
 
 
-# ---------- run(): failed cities get a second attempt ----------
+# ---------- run(): batching and the second attempt ----------
 
 from src import pipeline
 from src.cities import City
@@ -46,38 +46,65 @@ CITIES = [City(1, "Kano", "Kano State", 12.0, 8.6), City(2, "Abuja", "FCT", 9.1,
 
 @pytest.fixture
 def fake_steps(monkeypatch):
-    """Replace extract/transform/load; `fails[label]` = how many attempts fail first."""
-    fails, attempts = {}, []
+    """Replace extract/transform/load.
 
-    def fake_fetch(city, *args, **kwargs):
-        attempts.append(city.label)
+    fails["request"]: how many API requests fail first
+    fails[label]:     how many times that city's transform fails first
+    """
+    fails, requests_made, loaded = {}, [], []
+
+    def fake_fetch(cities, *args, **kwargs):
+        requests_made.append([c.label for c in cities])
+        if fails.get("request", 0) > 0:
+            fails["request"] -= 1
+            raise TimeoutError("Read timed out")
+        return [{} for _ in cities]
+
+    def fake_transform(data, city):
         if fails.get(city.label, 0) > 0:
             fails[city.label] -= 1
-            raise TimeoutError("Read timed out")
-        return {}
+            raise ValueError("bad data")
+        return city
 
     monkeypatch.setattr(pipeline, "fetch_recent", fake_fetch)
-    monkeypatch.setattr(pipeline, "transform", lambda data, city: None)
-    monkeypatch.setattr(pipeline, "load", lambda df, engine: 0)
+    monkeypatch.setattr(pipeline, "fetch_archive", fake_fetch)
+    monkeypatch.setattr(pipeline, "transform", fake_transform)
+    monkeypatch.setattr(pipeline, "load", lambda city, engine: loaded.append(city.label))
     monkeypatch.setattr(pipeline, "get_engine", lambda: None)
-    return fails, attempts
+    return fails, requests_made, loaded
 
 
-def test_city_that_recovers_on_second_attempt_counts_as_ok(fake_steps):
-    fails, attempts = fake_steps
-    fails["Abuja (FCT)"] = 1
+def test_daily_fetches_all_cities_in_one_request(fake_steps):
+    _, requests_made, loaded = fake_steps
     assert pipeline.run("daily", CITIES, retry_after=0) == []
-    assert attempts == ["Kano (Kano State)", "Abuja (FCT)", "Abuja (FCT)"]
+    assert requests_made == [["Kano (Kano State)", "Abuja (FCT)"]]
+    assert loaded == ["Kano (Kano State)", "Abuja (FCT)"]
 
 
-def test_city_that_keeps_failing_is_reported(fake_steps):
-    fails, attempts = fake_steps
+def test_backfill_fetches_one_city_per_request(fake_steps):
+    _, requests_made, _ = fake_steps
+    pipeline.run("backfill", CITIES, date(2024, 1, 1), date(2024, 1, 31), retry_after=0)
+    assert requests_made == [["Kano (Kano State)"], ["Abuja (FCT)"]]
+
+
+def test_failed_request_is_retried_once_and_recovers(fake_steps):
+    fails, requests_made, loaded = fake_steps
+    fails["request"] = 1
+    assert pipeline.run("daily", CITIES, retry_after=0) == []
+    assert len(requests_made) == 2
+    assert loaded == ["Kano (Kano State)", "Abuja (FCT)"]
+
+
+def test_request_that_keeps_failing_reports_every_city(fake_steps):
+    fails, requests_made, _ = fake_steps
+    fails["request"] = 5
+    assert pipeline.run("daily", CITIES, retry_after=0) == ["Kano (Kano State)", "Abuja (FCT)"]
+    assert len(requests_made) == 2  # one retry pass, not endless
+
+
+def test_one_bad_city_does_not_block_the_others(fake_steps):
+    fails, requests_made, loaded = fake_steps
     fails["Abuja (FCT)"] = 5
     assert pipeline.run("daily", CITIES, retry_after=0) == ["Abuja (FCT)"]
-    assert attempts.count("Abuja (FCT)") == 2  # one retry pass, not endless
-
-
-def test_no_retry_pass_when_everything_succeeds(fake_steps):
-    _, attempts = fake_steps
-    assert pipeline.run("daily", CITIES, retry_after=0) == []
-    assert len(attempts) == 2
+    assert loaded == ["Kano (Kano State)"]
+    assert requests_made[1] == ["Abuja (FCT)"]  # the retry only re-fetches the failed city

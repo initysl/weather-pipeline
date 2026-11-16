@@ -13,7 +13,7 @@ A daily data pipeline that keeps a clean, trustworthy weather table for 15 Niger
 
 ## What it does
 
-- **Updates every morning:** fetches yesterday's weather at 07:00 Lagos time, automatically.
+- **Updates every morning:** fetches yesterday's weather early each morning (Lagos time), automatically.
 - **Covers the whole country:** 15 cities from the dry Sahel (Sokoto, Maiduguri) to the wet Niger Delta (Port Harcourt), and any Nigerian town can be added with one command.
 - **Keeps the data correct:** every value is checked before it's stored, and suspect readings are flagged, not silently kept.
 - **Never duplicates:** re-running a day, or a whole year, always leaves exactly one record per city per day.
@@ -41,7 +41,7 @@ flowchart LR
         VW["Summary views"]
     end
 
-    GH["GitHub Actions<br/>daily at 07:00"] -.->|runs| EX
+    GH["GitHub Actions<br/>every morning"] -.->|runs| EX
     AR -->|backfill| EX
     FC -->|daily| EX
     EX --> TR --> LD --> FD
@@ -109,7 +109,7 @@ When several towns share a name, the main one (a capital or local government sea
 
 ### Schedule
 
-In production, [GitHub Actions](.github/workflows/daily.yml) runs the daily load at 07:00 Lagos time against a hosted PostgreSQL:
+In production, [GitHub Actions](.github/workflows/daily.yml) runs the daily load every morning against a hosted PostgreSQL:
 
 1. Add the database connection string as a repository secret named `DATABASE_URL`.
 2. Run the **Set up database** workflow once.
@@ -132,6 +132,7 @@ pytest
 - **Safe to re-run:** every load updates existing records instead of adding new ones, so retries and overlapping runs never create duplicates.
 - **Two data sources:** historical data comes from Open-Meteo's archive, recent days from its forecast service, which covers the archive's few-day delay.
 - **Built for a cloud database:** records are written in batches of up to 1,000, not one at a time. Over a slow connection, that made loading about 40 times faster in testing.
+- **Copes with a slow weather service:** all cities are fetched in one request with a hard time limit, and anything that fails is retried once a minute later.
 - **One city's failure doesn't stop the others,** and any failure is reported.
 - **Tested on every change** with automated tests, including a check that loading the same data twice changes nothing.
 

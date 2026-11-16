@@ -15,7 +15,9 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from src.cities import City, list_cities, resolve
-from src.config import ARCHIVE_LAG_DAYS, DAILY_PAST_DAYS, RETRY_FAILED_AFTER_SECONDS, TIMEZONE
+from src.config import (
+    ARCHIVE_LAG_DAYS, CITIES_PER_DAILY_REQUEST, DAILY_PAST_DAYS, RETRY_FAILED_AFTER_SECONDS, TIMEZONE,
+)
 from src.extract import fetch_archive, fetch_recent
 from src.load import get_engine, load
 from src.transform import transform
@@ -58,28 +60,53 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def _process_city(city: City, mode: str, start: date | None, end: date | None,
-                  save_raw: bool, engine) -> bool:
-    """Extract, transform and load one city; return True on success."""
+def _batches(cities: list[City], mode: str) -> list[list[City]]:
+    """Daily: many cities per API request. Backfill: one (multi-year requests are heavy)."""
+    size = CITIES_PER_DAILY_REQUEST if mode == "daily" else 1
+    return [cities[i:i + size] for i in range(0, len(cities), size)]
+
+
+def _process_batch(batch: list[City], mode: str, start: date | None, end: date | None,
+                   save_raw: bool, engine) -> list[City]:
+    """Fetch a batch in one request, then transform and load each city on its own.
+
+    Returns the cities that failed. If the request fails, the whole batch failed;
+    after that, one city's bad data never affects the others.
+    """
     try:
         if mode == "daily":
-            data = fetch_recent(city, DAILY_PAST_DAYS, save_raw=save_raw)
+            results = fetch_recent(batch, DAILY_PAST_DAYS, save_raw=save_raw)
         else:
             assert start and end
-            data = fetch_archive(city, start, end, save_raw=save_raw)
-        df = transform(data, city)
-        load(df, engine)  # one transaction per city
-        return True
+            results = fetch_archive(batch, start, end, save_raw=save_raw)
     except Exception:
-        # Keep going so one bad city doesn't block the rest
-        logger.exception("%s failed", city.label)
-        return False
+        logger.exception("Fetching %s failed", ", ".join(c.label for c in batch))
+        return list(batch)
+
+    failed = []
+    for city, data in zip(batch, results):
+        try:
+            df = transform(data, city)
+            load(df, engine)  # one transaction per city
+        except Exception:
+            # Keep going so one bad city doesn't block the rest
+            logger.exception("%s failed", city.label)
+            failed.append(city)
+    return failed
+
+
+def _process(cities: list[City], mode: str, start: date | None, end: date | None,
+             save_raw: bool, engine) -> list[City]:
+    failed = []
+    for batch in _batches(cities, mode):
+        failed += _process_batch(batch, mode, start, end, save_raw, engine)
+    return failed
 
 
 def run(mode: str, cities: list[City], start: date | None = None,
         end: date | None = None, save_raw: bool = True,
         retry_after: float = RETRY_FAILED_AFTER_SECONDS) -> list[str]:
-    """Process each city independently; return the cities that still failed.
+    """Process every city; return the labels of cities that still failed.
 
     Cities that fail are tried once more after `retry_after` seconds, so a brief
     API outage doesn't fail the whole run. (Each request already retries quickly;
@@ -90,14 +117,14 @@ def run(mode: str, cities: list[City], start: date | None = None,
                        "daily mode will overwrite them", ARCHIVE_LAG_DAYS)
 
     engine = get_engine()
-    failed = [c for c in cities if not _process_city(c, mode, start, end, save_raw, engine)]
+    failed = _process(cities, mode, start, end, save_raw, engine)
 
     if failed:
         logger.warning("Retrying %d failed %s in %ds: %s", len(failed),
                        "city" if len(failed) == 1 else "cities", retry_after,
                        [c.label for c in failed])
         time.sleep(retry_after)
-        failed = [c for c in failed if not _process_city(c, mode, start, end, save_raw, engine)]
+        failed = _process(failed, mode, start, end, save_raw, engine)
 
     labels = [c.label for c in failed]
     logger.info("Done (%s): %d ok, %d failed %s",

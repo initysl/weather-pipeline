@@ -7,7 +7,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import TIMESTAMP, insert
 
-from src.config import DATABASE_URL
+from src.config import DATABASE_URL, DB_CONNECT_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,9 @@ def _upsert_statement(rows: list[dict]):
 
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
-    return create_engine(DATABASE_URL, pool_pre_ping=True)
+    # connect_timeout: fail in seconds, not hang, if the database can't be reached
+    return create_engine(DATABASE_URL, pool_pre_ping=True,
+                         connect_args={"connect_timeout": DB_CONNECT_TIMEOUT_S})
 
 
 def upsert_weather(conn: Connection, df: pd.DataFrame) -> int:

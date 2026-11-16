@@ -15,8 +15,8 @@ from datetime import date
 
 from sqlalchemy import Connection, text
 
-from src.config import COUNTRY_CODE, GEOCODING_URL
-from src.http_session import session
+from src.config import COUNTRY_CODE, GEOCODING_URL, HTTP_TIMEOUT_S, REQUEST_DEADLINE_S
+from src.http_session import deadline, session
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +88,13 @@ class AmbiguousPlace(Exception):
 
 def search_places(name: str) -> list[dict]:
     """Populated places in Nigeria matching `name`, most relevant first."""
-    resp = session.get(GEOCODING_URL, params={
-        "name": name, "count": 20, "country_code": COUNTRY_CODE,
-        "language": "en", "format": "json",
-    }, timeout=30)
-    resp.raise_for_status()
-    results = resp.json().get("results", [])
+    with deadline(REQUEST_DEADLINE_S, f"geocoding {name!r}"):
+        resp = session.get(GEOCODING_URL, params={
+            "name": name, "count": 20, "country_code": COUNTRY_CODE,
+            "language": "en", "format": "json",
+        }, timeout=HTTP_TIMEOUT_S)
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
     # The API treats country_code as a hint, not a filter, and returns airports
     # and districts too, so keep only towns and cities in Nigeria.
     return [
