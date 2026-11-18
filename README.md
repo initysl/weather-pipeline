@@ -41,7 +41,7 @@ flowchart LR
         VW["Summary views"]
     end
 
-    GH["GitHub Actions<br/>every morning"] -.->|runs| EX
+    GH["GitHub Actions<br/>3× a day"] -.->|runs| EX
     AR -->|backfill| EX
     FC -->|daily| EX
     EX --> TR --> LD --> FD
@@ -52,7 +52,7 @@ flowchart LR
 
 | Stage | What happens |
 |---|---|
-| **Schedule** | GitHub Actions starts the pipeline every morning; history is loaded on demand. |
+| **Schedule** | GitHub Actions starts the pipeline three times a day; history is loaded on demand. |
 | **Extract** | Fetches each tracked city's weather: history from the archive, the latest week from the forecast service. Failed requests are retried. |
 | **Transform** | Puts the data into a clean table and checks every value. Impossible readings are logged and removed. |
 | **Load** | Writes to PostgreSQL in batches, updating existing days instead of duplicating them. |
